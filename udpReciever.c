@@ -92,6 +92,8 @@ int main(int argc, char *argv[])
             (struct sockaddr *) &echoClntAddr, &cliAddrLen)) < 0)
             DieWithError("recvfrom() failed");
 
+            seqNumber = dataPacket.seq_no;
+
         /* Add random packet lose, if lost dont process */
         if(!is_lost(loss_rate)){
             /* If seq is zero start new data collection */
@@ -107,7 +109,7 @@ int main(int argc, char *argv[])
                 /* then concatinate the data sent to the recieving buffer */
                 printf("Recieved  Subseqent Packet #%d\n", dataPacket.seq_no);
                 strcat(dataBuffer, dataPacket.data);
-                base++;
+                base = dataPacket.seq_no;
                 ack = createACKPacket(2, base);
             } else if (dataPacket.type == 1 && dataPacket.seq_no != base + 1)
             {
@@ -118,7 +120,7 @@ int main(int argc, char *argv[])
             }
 
             /* type 4 means that the packet recieved is a termination packet */
-            if(dataPacket.type == 4){
+            if(dataPacket.type == 4 && seqNumber == base ){
                 base = -1;
                 /* create an ACK packet with terminal type 8 */
                 ack = createACKPacket(8, base);
@@ -131,6 +133,7 @@ int main(int argc, char *argv[])
                      (struct sockaddr *) &echoClntAddr, sizeof(echoClntAddr)) != sizeof(ack))
                     DieWithError("sendto() sent a different number of bytes than expected");
             } else if (base == -1) {
+                printf("Recieved Teardown Packet\n");
                 printf("Sending Terminal ACK\n", base);
                 if (sendto(sock, &ack, sizeof(ack), 0,
                      (struct sockaddr *) &echoClntAddr, sizeof(echoClntAddr)) != sizeof(ack))
@@ -138,8 +141,7 @@ int main(int argc, char *argv[])
             }
 
             /* if data packet is terminal packet, display and clear the recieved message */
-            if(dataPacket.type == 4){
-                printf("Recieved Teardown Packet\n");
+            if(dataPacket.type == 4 && base == -1){
                 printf("\n MESSAGE RECIEVED\n %s\n\n", dataBuffer);
                 memset(dataBuffer, 0, sizeof(dataBuffer));
             }

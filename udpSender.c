@@ -54,6 +54,7 @@ int main(int argc, char *argv[])
     /* Variables used to control the flow of data */
     int chunkSize;                          /* number of bits of data sent with each segment */
     int windowSize;                         /* Number of segments in limbo */
+    int tries =0;                           /* Number of tries itterator */
 
     if (argc != 5)    /* Test for correct number of arguments */
     {
@@ -99,7 +100,7 @@ int main(int argc, char *argv[])
     }
 
     /* Set seqNumber, base and ACK to 0 */
-    int base = 0;           /* highest segments AKC recieved */
+    int base = -1;           /* highest segments AKC recieved */
     int seqNumber = 0;      /* highest segment sent, reset by base */
     int dataLength = 0;     /* Chunk size */
 
@@ -127,7 +128,7 @@ int main(int argc, char *argv[])
 
             if(seqNumber == numOfSegments){
                 /* Reached end, create terminal packet */
-                dataPacket = createTerminalPacket(seqNumber - 1, 0);
+                dataPacket = createTerminalPacket(seqNumber, 0);
                 printf("Sending Terminal Packet\n");
             } else {
                 /* Create Data Packet Struct */
@@ -160,34 +161,43 @@ int main(int argc, char *argv[])
         {
             if (errno == EINTR)     /* Alarm went off  */
             {
-                printf("Timer went off\n");
-                /* This is the Go-Back-N, If timer goes off then appropriate ACKs have not been received,
-                   Reset the base to the last correct ACK number received and the sequence number to one
-                   segment in front of that, thus going back n segments */
-                base = ack.ack_no;
-                seqNumber = ack.ack_no + 1;
+                /* reset the seqNumber back to one ahead of the last recieved ACK */
+                seqNumber = base + 1;
 
-                struct segmentPacket dataPacket;
-
-                if(seqNumber == numOfSegments){
-                    /* Reached end, create terminal packet */
-                    dataPacket = createTerminalPacket(seqNumber - 1, 0);
-                    printf("Sending Terminal Packet\n");
-                } else {
-                    /* Create Data Packet Struct */
-                    char seg_data[chunkSize];
-                    strncpy(seg_data, (dataBuffer + seqNumber*chunkSize), chunkSize);
-
-                    dataPacket = createDataPacket(seqNumber, dataLength, seg_data);
-                    printf("Sending Packet: %d\n", seqNumber);
-                    //printf("Chunk: %s\n", seg_data);
+                printf("Timeout: Resending\n");
+                if(tries >= 10){
+                    printf("Tries exceeded: Closing\n");
+                    exit(1);
                 }
+                else {
+                    alarm(0);
 
-                /* Send the packet to the receiver. */
-                if (sendto(sock, &dataPacket, sizeof(dataPacket), 0,
-                     (struct sockaddr *) &recievingServer, sizeof(recievingServer)) != sizeof(dataPacket))
-                    DieWithError("sendto() sent a different number of bytes than expected");
-                seqNumber++;
+                    while(seqNumber <= numOfSegments && (seqNumber - base) <= windowSize){
+                        struct segmentPacket dataPacket;
+
+                        if(seqNumber == numOfSegments){
+                            /* Reached end, create terminal packet */
+                            dataPacket = createTerminalPacket(seqNumber, 0);
+                            printf("Sending Terminal Packet\n");
+                        } else {
+                            /* Create Data Packet Struct */
+                            char seg_data[chunkSize];
+                            strncpy(seg_data, (dataBuffer + seqNumber*chunkSize), chunkSize);
+
+                            dataPacket = createDataPacket(seqNumber, dataLength, seg_data);
+                            printf("Sending Packet: %d\n", seqNumber);
+                            //printf("Chunk: %s\n", seg_data);
+                        }
+
+                        /* Send the constructed data packet to the receiver */
+                        if (sendto(sock, &dataPacket, sizeof(dataPacket), 0,
+                             (struct sockaddr *) &recievingServer, sizeof(recievingServer)) != sizeof(dataPacket))
+                            DieWithError("sendto() sent a different number of bytes than expected");
+                        seqNumber++;
+                    }
+                    alarm(TIMEOUT_SECS);
+                }
+                tries++;
             }
             else
             {
@@ -207,8 +217,9 @@ int main(int argc, char *argv[])
             noTearDownACK = 0;
         }
 
-        /* recvfrom() got something --  cancel the timeout */
+        /* recvfrom() got something --  cancel the timeout, reset tries */
         alarm(0);
+        tries = 0;
 
     }
 
