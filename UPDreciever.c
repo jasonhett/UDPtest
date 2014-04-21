@@ -7,16 +7,20 @@
 
 #define ECHOMAX 50000     /* Longest string to echo */
 
-void DieWithError(char *errorMessage);  /* External error handling function */
-struct ACKPacket createACKPacket (int ack_type, int base);
-int is_lost(float loss_rate);
+void DieWithError(char *errorMessage);                      /* External error handling function */
+struct ACKPacket createACKPacket (int ack_type, int base);  /* Creates a ACK packet to be sent */
+int is_lost(float loss_rate);                               /* Given function for lose rate */
 
+
+/* Structure of the segmentPacket for recieving from sender */
 struct segmentPacket {
     int type;
     int seq_no;
     int length;
     char data[512];
 };
+
+/* Structure of the ACK Packet that is returned to sender */
 struct ACKPacket {
     int type;
     int ack_no;
@@ -32,8 +36,9 @@ int main(int argc, char *argv[])
     unsigned short echoServPort;     /* Server port */
     int recvMsgSize;                 /* Size of received message */
     int chunkSize;                   /* Size of chunks to send */
-    float loss_rate = 0;                  /* Size of the window for packets to send */
+    float loss_rate = 0;             /* lose rate range from 0.0 -> 1.0, initialized to zero b/c lose rate is optional */
 
+    /* random generator seeding */
     srand48(2345);
 
     if (argc < 3 || argc > 4)         /* Test for correct number of parameters */
@@ -42,13 +47,15 @@ int main(int argc, char *argv[])
         exit(1);
     }
 
+    /* Set arguments to appropriate values */
     echoServPort = atoi(argv[1]);  /* First arg:  local port */
     chunkSize = atoi(argv[2]);  /* Second arg:  size of chunks */
+
+    /* loss rate is option, thus muct check for 4th argv */
     if(argc == 4){
         loss_rate = atof(argv[3]);
 
     }
-
 
     /* Create socket for sending/receiving datagrams */
     if ((sock = socket(PF_INET, SOCK_DGRAM, IPPROTO_UDP)) < 0)
@@ -64,6 +71,7 @@ int main(int argc, char *argv[])
     if (bind(sock, (struct sockaddr *) &echoServAddr, sizeof(echoServAddr)) < 0)
         DieWithError("bind() failed");
 
+    /* Initialize variables to their needed start values */
     char dataBuffer[8192];
     int base = -2;
     int seqNumber = 0;
@@ -94,30 +102,31 @@ int main(int argc, char *argv[])
                 strcpy(dataBuffer, dataPacket.data);
                 base = 0;
                 ack = createACKPacket(2, base);
-            } else if (dataPacket.seq_no == base + 1){
-                /* else concatinate the data */
-                printf("Recieved  Subseqent Packet #%d from %s\n", dataPacket.seq_no, inet_ntoa(echoClntAddr.sin_addr));
+            } else if (dataPacket.seq_no == base + 1) /* if base+1 then its a subsequent in order packet */
+            {
+                /* then concatinate the data sent to the recieving buffer */
+                printf("Recieved  Subseqent Packet #%d\n", dataPacket.seq_no);
                 strcat(dataBuffer, dataPacket.data);
                 base++;
                 ack = createACKPacket(2, base);
             } else if (dataPacket.type == 1 && dataPacket.seq_no != base + 1)
             {
-                printf("Recieved Out of Sync Packet #%d from %s\n", dataPacket.seq_no, inet_ntoa(echoClntAddr.sin_addr));
+                /* if recieved out of sync packet, send ACK with old base */
+                printf("Recieved Out of Sync Packet #%d\n", dataPacket.seq_no);
                 /* Resend ACK with old base */
                 ack = createACKPacket(2, base);
             }
 
+            /* type 4 means that the packet recieved is a termination packet */
             if(dataPacket.type == 4){
-                printf("Recieved Teardown Packet from %s\n", inet_ntoa(echoClntAddr.sin_addr));
-                printf("\n MESSAGE RECIEVED\n %s\n\n", dataBuffer);
-                memset(dataBuffer, 0, sizeof(dataBuffer));
                 base = -1;
+                /* create an ACK packet with terminal type 8 */
                 ack = createACKPacket(8, base);
             }
 
             /* Send ACK for Packet Recieved */
             if(base >= 0){
-                printf("Sending ACK #%d\n", base);
+                printf("------------------------------------  Sending ACK #%d\n", base);
                 if (sendto(sock, &ack, sizeof(ack), 0,
                      (struct sockaddr *) &echoClntAddr, sizeof(echoClntAddr)) != sizeof(ack))
                     DieWithError("sendto() sent a different number of bytes than expected");
@@ -127,6 +136,14 @@ int main(int argc, char *argv[])
                      (struct sockaddr *) &echoClntAddr, sizeof(echoClntAddr)) != sizeof(ack))
                     DieWithError("sendto() sent a different number of bytes than expected");
             }
+
+            /* if data packet is terminal packet, display and clear the recieved message */
+            if(dataPacket.type == 4){
+                printf("Recieved Teardown Packet\n");
+                printf("\n MESSAGE RECIEVED\n %s\n\n", dataBuffer);
+                memset(dataBuffer, 0, sizeof(dataBuffer));
+            }
+
         } else {
             printf("SIMULATED LOSE\n");
         }
@@ -135,18 +152,22 @@ int main(int argc, char *argv[])
     /* NOT REACHED */
 }
 
+/* If this is called there was an error, Printed and then the process exits */
 void DieWithError(char *errorMessage)
 {
     perror(errorMessage);
     exit(1);
 }
 
+/* Creates and returns a segment Packet */
 struct ACKPacket createACKPacket (int ack_type, int base){
         struct ACKPacket ack;
         ack.type = ack_type;
         ack.ack_no = base;
         return ack;
 }
+
+/* The given lost rate function */
 int is_lost(float loss_rate) {
     double rv;
     rv = drand48();

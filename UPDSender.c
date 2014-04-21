@@ -21,17 +21,21 @@ int tries=0;   /* Count of times sent - GLOBAL for signal-handler access */
 void DieWithError(char *errorMessage);   /* Error handling function */
 void CatchAlarm(int ignored);            /* Handler for SIGALRM */
 
+/* Structure of the segmentPacket for recieving from sender */
 struct segmentPacket {
     int type;
     int seq_no;
     int length;
     char data[512];
 };
+
+/* Structure of the ACK Packet that is returned to sender */
 struct ACKPacket {
     int type;
     int ack_no;
 };
 
+/* Function headers used to create packets */
 struct segmentPacket createDataPacket (int seq_no, int length, char* data);
 struct segmentPacket createTerminalPacket (int seq_no, int length);
 
@@ -47,9 +51,9 @@ int main(int argc, char *argv[])
     char *servIP;                           /* IP address of server */
     int respStringLen;                      /* Size of received datagram */
 
-    int chunkSize;
-    int windowSize;
-    int tries = 0;
+    /* Variables used to control the flow of data */
+    int chunkSize;                          /* number of bits of data sent with each segment */
+    int windowSize;                         /* Number of segments in limbo */
 
     if (argc != 5)    /* Test for correct number of arguments */
     {
@@ -57,15 +61,18 @@ int main(int argc, char *argv[])
         exit(1);
     }
 
-    servIP = argv[1];                    /* First arg:  server IP address (dotted quad) */
+    /* Set the corresponding agrs to their respective variables */
+    servIP = argv[1];                          /* First arg:  server IP address (dotted quad) */
     recievingServerPort = atoi(argv[2]);       /* Second arg: string to echo */
     chunkSize = atoi(argv[3]);                 /* Third arg: Size of chunks being sent */
     windowSize = atoi(argv[4]);                /* Fourth arg: Size of Segment window */
 
+    /* Print out of initial connection data */
     printf("Attempting to Send to: \n");
     printf("IP:          %s\n", servIP);
     printf("Port:        %d\n", recievingServerPort);
 
+    /* Check to make sure appropriate chunk size was entered */
     if(chunkSize > DATALIMIT){
         fprintf(stderr, "Error: Chunk Size is too large. Must be < 512 bytes\n");
         exit(1);
@@ -83,8 +90,6 @@ int main(int argc, char *argv[])
     recievingServer.sin_port = htons(recievingServerPort);       /* Server port */
 
 
-    /* MY CODE */
-
     /* Calculate number of Segments */
     int dataBufferSize = strlen(dataBuffer);
     int numOfSegments = dataBufferSize / chunkSize;
@@ -96,8 +101,9 @@ int main(int argc, char *argv[])
     /* Set seqNumber, base and ACK to 0 */
     int base = 0;           /* highest segments AKC recieved */
     int seqNumber = 0;      /* highest segment sent, reset by base */
-    int dataLength = 0;
+    int dataLength = 0;     /* Chunk size */
 
+    /* Print out of data stats */
     printf("Window Size: %d\n", windowSize);
     printf("Chunk Size:  %d\n", chunkSize);
     printf("Chunks:      %d\n", numOfSegments);
@@ -111,6 +117,7 @@ int main(int argc, char *argv[])
     if (sigaction(SIGALRM, &myAction, 0) < 0)
         DieWithError("sigaction() failed for SIGALRM");
 
+    /* bool used to keep the program running until teardown ack has been recieved */
     int noTearDownACK = 1;
     while(noTearDownACK){
 
@@ -128,11 +135,11 @@ int main(int argc, char *argv[])
                 strncpy(seg_data, (dataBuffer + seqNumber*chunkSize), chunkSize);
 
                 dataPacket = createDataPacket(seqNumber, dataLength, seg_data);
-                printf("Sending chunk #%d\n", seqNumber);
-                printf("Chunk: %s\n", seg_data);
+                printf("Sending Packet: %d\n", seqNumber);
+                //printf("Chunk: %s\n", seg_data);
             }
 
-
+            /* Send the constructed data packet to the receiver */
             if (sendto(sock, &dataPacket, sizeof(dataPacket), 0,
                  (struct sockaddr *) &recievingServer, sizeof(recievingServer)) != sizeof(dataPacket))
                 DieWithError("sendto() sent a different number of bytes than expected");
@@ -143,7 +150,8 @@ int main(int argc, char *argv[])
         /* Set Timer */
         alarm(TIMEOUT_SECS);        /* Set the timeout */
 
-        printf("Waiting for ACKs\n");
+        /* IF window is full alert that it is waiting */
+        printf("Window full: waiting for ACKs\n");
 
         /* Listen for ACKs, get highest ACK, reset base */
         struct ACKPacket ack;
@@ -153,6 +161,9 @@ int main(int argc, char *argv[])
             if (errno == EINTR)     /* Alarm went off  */
             {
                 printf("Timer went off\n");
+                /* This is the Go-Back-N, If timer goes off then appropriate ACKs have not been received,
+                   Reset the base to the last correct ACK number received and the sequence number to one
+                   segment in front of that, thus going back n segments */
                 base = ack.ack_no;
                 seqNumber = ack.ack_no + 1;
 
@@ -168,11 +179,11 @@ int main(int argc, char *argv[])
                     strncpy(seg_data, (dataBuffer + seqNumber*chunkSize), chunkSize);
 
                     dataPacket = createDataPacket(seqNumber, dataLength, seg_data);
-                    printf("Sending chunk #%d\n", seqNumber);
-                    printf("Chunk: %s\n", seg_data);
+                    printf("Sending Packet: %d\n", seqNumber);
+                    //printf("Chunk: %s\n", seg_data);
                 }
 
-
+                /* Send the packet to the receiver. */
                 if (sendto(sock, &dataPacket, sizeof(dataPacket), 0,
                      (struct sockaddr *) &recievingServer, sizeof(recievingServer)) != sizeof(dataPacket))
                     DieWithError("sendto() sent a different number of bytes than expected");
@@ -186,7 +197,7 @@ int main(int argc, char *argv[])
 
         /* 8 is teardown ack */
         if(ack.type != 8){
-            printf("Recieved ACK: %d\n", ack.ack_no);
+            printf("----------------------- Recieved ACK: %d\n", ack.ack_no);
             if(ack.ack_no > base){
                 /* Advances the sending, reset tries */
                 base = ack.ack_no;
@@ -208,15 +219,17 @@ int main(int argc, char *argv[])
 
 void CatchAlarm(int ignored)     /* Handler for SIGALRM */
 {
-    printf("In Alarm\n");
+    //printf("In Alarm\n");
 }
 
+/* If this is called there was an error, Printed and then the process exits */
 void DieWithError(char *errorMessage)
 {
     perror(errorMessage);
     exit(1);
 }
 
+/* Creates and returns a segment Packet */
 struct segmentPacket createDataPacket (int seq_no, int length, char* data){
 
     struct segmentPacket pkt;
@@ -229,6 +242,8 @@ struct segmentPacket createDataPacket (int seq_no, int length, char* data){
 
     return pkt;
 }
+
+/* Creates and returns a terminal segment Packet */
 struct segmentPacket createTerminalPacket (int seq_no, int length){
 
     struct segmentPacket pkt;
